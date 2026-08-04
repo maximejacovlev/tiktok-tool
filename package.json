@@ -12,7 +12,7 @@
   "license": "ISC",
   "dependencies": {
     "archiver": "^6.0.2",
-    "express": "^5.2.1",
+    "express": "^4.22.2",
     "https-proxy-agent": "^9.1.0",
     "multer": "^2.2.0",
     "node-fetch": "^2.7.0"

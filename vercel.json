@@ -1,8 +1,6 @@
 {
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api" },
-    { "source": "/bank-files/(.*)", "destination": "/api" },
-    { "source": "/project-files/(.*)", "destination": "/api" }
+    { "source": "/(.*)", "destination": "/api" }
   ],
   "functions": {
     "api/index.js": {

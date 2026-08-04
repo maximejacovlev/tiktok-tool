@@ -14,18 +14,19 @@ const PROXY_SERVER = process.env.HTTPS_PROXY || process.env.https_proxy;
 const proxyAgent = PROXY_SERVER ? new HttpsProxyAgent(PROXY_SERVER) : undefined;
 
 const IS_VERCEL = !!process.env.VERCEL;
-const ROOT = IS_VERCEL ? path.join('/tmp', 'tiktok-tool') : path.join(__dirname, '..');
-const BANK_DIR = path.join(ROOT, 'uploads', 'bank');
-const EXPORT_DIR = path.join(ROOT, 'uploads', 'exports');
-const PROJECTS_DIR = path.join(ROOT, 'uploads', 'projects');
-const TITLES_FILE = path.join(ROOT, 'uploads', 'titles.json');
+const APP_ROOT = path.join(__dirname, '..');
+const DATA_ROOT = IS_VERCEL ? path.join('/tmp', 'tiktok-tool') : APP_ROOT;
+const BANK_DIR = path.join(DATA_ROOT, 'uploads', 'bank');
+const EXPORT_DIR = path.join(DATA_ROOT, 'uploads', 'exports');
+const PROJECTS_DIR = path.join(DATA_ROOT, 'uploads', 'projects');
+const TITLES_FILE = path.join(DATA_ROOT, 'uploads', 'titles.json');
 const PROJECT_STATUSES = ['to_edit', 'wip', 'ready_to_post', 'posted'];
 
 [BANK_DIR, EXPORT_DIR, PROJECTS_DIR].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
 if (!fs.existsSync(TITLES_FILE)) fs.writeFileSync(TITLES_FILE, '[]');
 
 app.use(express.json({ limit: '50mb' }));
-app.use(express.static(path.join(ROOT, 'public')));
+app.use(express.static(path.join(APP_ROOT, 'public')));
 app.use('/bank-files', express.static(BANK_DIR));
 app.use('/project-files', express.static(PROJECTS_DIR));
 
@@ -272,6 +273,14 @@ app.delete('/api/titles/:id', (req, res) => {
   }
   writeTitles(titles);
   res.json({ ok: true });
+});
+
+// SPA fallback (Vercel routes all traffic through this function)
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api')) return next();
+  res.sendFile(path.join(APP_ROOT, 'public', 'index.html'), (err) => {
+    if (err) next(err);
+  });
 });
 
 module.exports = app;
