@@ -7,6 +7,7 @@ const archiver = require('archiver');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const { scrapeCarousel } = require('./scraper');
 const { getStore } = require('./store');
+const postgresStore = require('./store/postgres');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -58,14 +59,16 @@ app.use(async (req, res, next) => {
 // ---------- Storage status ----------
 app.get('/api/storage', async (req, res) => {
   const store = await getStore();
+  const env = postgresStore.getEnvStatus();
   res.json({
     kind: store.kind,
     persistent: store.kind === 'postgres',
+    env: IS_VERCEL ? { postgres: env.postgres, blob: env.blob } : undefined,
     hint:
       store.kind === 'postgres'
         ? 'Données persistées (Postgres + Blob).'
         : IS_VERCEL
-          ? 'Données temporaires — ajoute Postgres + Blob dans le dashboard Vercel.'
+          ? postgresStore.storageHint()
           : 'Données locales dans uploads/.',
   });
 });

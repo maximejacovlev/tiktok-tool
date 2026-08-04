@@ -4,8 +4,26 @@ const { PROJECT_STATUSES } = require('./constants');
 
 let ready = false;
 
+function ensurePostgresEnv() {
+  if (!process.env.POSTGRES_URL && process.env.DATABASE_URL) {
+    process.env.POSTGRES_URL = process.env.DATABASE_URL;
+  }
+  if (!process.env.POSTGRES_URL_NON_POOLING && process.env.DATABASE_URL_UNPOOLED) {
+    process.env.POSTGRES_URL_NON_POOLING = process.env.DATABASE_URL_UNPOOLED;
+  }
+}
+
+function getEnvStatus() {
+  ensurePostgresEnv();
+  return {
+    postgres: !!(process.env.POSTGRES_URL || process.env.DATABASE_URL),
+    blob: !!process.env.BLOB_READ_WRITE_TOKEN,
+  };
+}
+
 function isAvailable() {
-  return !!(process.env.POSTGRES_URL && process.env.BLOB_READ_WRITE_TOKEN);
+  const { postgres, blob } = getEnvStatus();
+  return postgres && blob;
 }
 
 async function init() {
@@ -224,9 +242,24 @@ async function deleteTitle(id) {
   return rowCount > 0;
 }
 
+function storageHint() {
+  const env = getEnvStatus();
+  const missing = [];
+  if (!env.postgres) missing.push('Postgres (Neon)');
+  if (!env.blob) missing.push('Blob');
+  if (!missing.length) return 'Données persistées (Postgres + Blob).';
+  if (missing.length === 2) {
+    return 'Données temporaires — connecte Postgres + Blob dans le dashboard Vercel, puis redeploie.';
+  }
+  return `Données temporaires — manque ${missing.join(' et ')}. Redeploie après connexion.`;
+}
+
 module.exports = {
   kind: 'postgres',
   PROJECT_STATUSES,
+  ensurePostgresEnv,
+  getEnvStatus,
+  storageHint,
   isAvailable,
   init,
   listProjects,
