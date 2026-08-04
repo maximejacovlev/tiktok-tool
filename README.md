@@ -38,7 +38,10 @@ Cet outil a été développé et testé dans un environnement sandbox sans accè
 - TikTok change parfois la structure de ses pages ; si l'extraction casse un jour, il faudra ajuster `src/scraper.js` (fonction `deepFindItemStruct`).
 - Le scraping automatisé de TikTok peut être contraire à leurs conditions d'utilisation selon l'usage — à utiliser uniquement sur du contenu dont tu as les droits (ex: tes propres posts).
 
-Pour héberger en ligne, une plateforme qui supporte un processus Node.js persistant avec Chromium (Render, Railway, Fly.io, un VPS) convient mieux qu'une fonction serverless classique (Vercel/Netlify), car Playwright a besoin de lancer un vrai navigateur.
+Pour héberger en ligne :
+
+- **Vercel** : supporté via `api/index.js` + `vercel.json`. Le scraping utilise fetch HTTP (pas Playwright). Les données (carrousels, banque, titres) sont stockées dans `/tmp` — **elles sont effacées entre les redéploiements** et ne sont pas partagées entre instances.
+- **Render / Railway / Fly.io / VPS** : mieux si tu veux un stockage persistant et Playwright en fallback. Lance `npm install` (inclut Playwright en dev) puis `npm start`.
 
 ## Structure du projet
 

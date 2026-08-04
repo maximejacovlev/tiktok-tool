@@ -1,6 +1,5 @@
 const fetch = require('node-fetch');
 const { HttpsProxyAgent } = require('https-proxy-agent');
-const { chromium } = require('playwright');
 
 const FETCH_HEADERS = {
   'User-Agent':
@@ -36,7 +35,7 @@ async function scrapeCarousel(tiktokUrl) {
     if (!data) data = parsed;
   }
 
-  if (!hasPostData(data)) {
+  if (!hasPostData(data) && !process.env.VERCEL) {
     const fallbackUrl = [...tried].find((u) => u.includes('tiktok.com/'));
     if (fallbackUrl) {
       data = await fetchHydrationDataWithBrowser(fallbackUrl, proxyServer);
@@ -184,6 +183,14 @@ async function fetchHtml(url, agent) {
 }
 
 async function fetchHydrationDataWithBrowser(url, proxyServer) {
+  if (process.env.VERCEL) return null;
+  let chromium;
+  try {
+    ({ chromium } = require('playwright'));
+  } catch {
+    return null;
+  }
+
   const browser = await chromium.launch({
     executablePath: findExecutable(),
     headless: true,

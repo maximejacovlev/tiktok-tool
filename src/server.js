@@ -13,7 +13,8 @@ const PORT = process.env.PORT || 3000;
 const PROXY_SERVER = process.env.HTTPS_PROXY || process.env.https_proxy;
 const proxyAgent = PROXY_SERVER ? new HttpsProxyAgent(PROXY_SERVER) : undefined;
 
-const ROOT = path.join(__dirname, '..');
+const IS_VERCEL = !!process.env.VERCEL;
+const ROOT = IS_VERCEL ? path.join('/tmp', 'tiktok-tool') : path.join(__dirname, '..');
 const BANK_DIR = path.join(ROOT, 'uploads', 'bank');
 const EXPORT_DIR = path.join(ROOT, 'uploads', 'exports');
 const PROJECTS_DIR = path.join(ROOT, 'uploads', 'projects');
@@ -31,7 +32,7 @@ app.use('/project-files', express.static(PROJECTS_DIR));
 // ---------- 1. Scrape a TikTok carousel link ----------
 app.post('/api/scrape', async (req, res) => {
   const { url } = req.body || {};
-  if (!url || !/tiktok\.com/.test(url)) {
+  if (!url || !/tiktok\.com/i.test(url)) {
     return res.status(400).json({ error: 'Merci de fournir un lien TikTok valide.' });
   }
   try {
@@ -273,6 +274,10 @@ app.delete('/api/titles/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(PORT, () => {
-  console.log(`TikTok Carousel Tool running on http://localhost:${PORT}`);
-});
+module.exports = app;
+
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`TikTok Carousel Tool running on http://localhost:${PORT}`);
+  });
+}
