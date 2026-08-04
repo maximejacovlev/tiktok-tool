@@ -172,7 +172,7 @@ async function saveSlide(id, index, file, totalCount) {
 
   await sql`
     INSERT INTO project_slides (project_id, slide_index, file_url)
-    VALUES (${id}, ${index}, ${blob.url})
+    VALUES (${id}, ${index}, ${blob.pathname || blob.url})
     ON CONFLICT (project_id, slide_index)
     DO UPDATE SET file_url = EXCLUDED.file_url
   `;
@@ -204,11 +204,14 @@ async function listBank() {
 async function addBankFiles(files) {
   const out = [];
   for (const f of files) {
+    if (!f.buffer?.length) {
+      throw new Error(`Fichier vide: ${f.originalname}`);
+    }
     const id = `${Date.now()}-${f.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
     const blob = await blobStore.uploadBlob(`bank/${id}`, f.buffer, {
       contentType: f.mimetype,
     });
-    await sql`INSERT INTO bank_images (id, file_url) VALUES (${id}, ${blob.url})`;
+    await sql`INSERT INTO bank_images (id, file_url) VALUES (${id}, ${blob.pathname || blob.url})`;
     out.push({ filename: id, url: blobStore.toClientUrl(blob.url) });
   }
   return out;

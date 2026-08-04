@@ -8,6 +8,7 @@ const { HttpsProxyAgent } = require('https-proxy-agent');
 const { scrapeCarousel } = require('./scraper');
 const { getStore } = require('./store');
 const blobStore = require('./store/blob');
+const { parseMultipartFiles } = require('./multipart');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -137,11 +138,37 @@ app.get('/api/image', async (req, res) => {
 });
 
 // ---------- 3. Image bank ----------
-app.post('/api/bank/upload', memoryUpload.array('images', 30), async (req, res) => {
+app.post('/api/bank/upload-json', async (req, res) => {
+  const { filename, mimeType, data } = req.body || {};
+  if (!data) return res.status(400).json({ error: 'Données image manquantes.' });
+  const buffer = Buffer.from(data, 'base64');
+  if (!buffer.length) return res.status(400).json({ error: 'Fichier vide.' });
   await withStore(res, async (store) => {
-    const files = await store.addBankFiles(req.files || []);
-    res.json({ files });
+    const uploaded = await store.addBankFiles([
+      {
+        originalname: filename || 'image.png',
+        mimetype: mimeType || 'image/png',
+        buffer,
+      },
+    ]);
+    res.json({ files: uploaded });
   });
+});
+
+app.post('/api/bank/upload', async (req, res) => {
+  try {
+    const files = await parseMultipartFiles(req);
+    if (!files.length) {
+      return res.status(400).json({ error: 'Aucun fichier reçu.' });
+    }
+    await withStore(res, async (store) => {
+      const uploaded = await store.addBankFiles(files);
+      res.json({ files: uploaded });
+    });
+  } catch (err) {
+    console.error('Bank upload error:', err);
+    res.status(400).json({ error: err.message || 'Upload échoué.' });
+  }
 });
 
 app.get('/api/bank', async (req, res) => {
