@@ -811,7 +811,23 @@ $('#title-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') $('#btn-add-title').click();
 });
 
+// ---------------- Storage status ----------------
+async function refreshStorageStatus() {
+  const el = $('#storage-status');
+  if (!el) return;
+  try {
+    const res = await fetch('/api/storage');
+    const data = await res.json();
+    el.textContent = data.hint || '';
+    el.classList.toggle('persistent', !!data.persistent);
+    el.classList.toggle('ephemeral', !data.persistent);
+  } catch {
+    el.textContent = '';
+  }
+}
+
 // ---------------- Init ----------------
+refreshStorageStatus();
 refreshBank();
 refreshProjects();
 refreshTitles();

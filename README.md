@@ -40,15 +40,25 @@ Cet outil a été développé et testé dans un environnement sandbox sans accè
 
 Pour héberger en ligne :
 
-- **Vercel** : supporté via `api/index.js` + `vercel.json`. Le scraping utilise fetch HTTP (pas Playwright). Les données (carrousels, banque, titres) sont stockées dans `/tmp` — **elles sont effacées entre les redéploiements** et ne sont pas partagées entre instances.
-- **Render / Railway / Fly.io / VPS** : mieux si tu veux un stockage persistant et Playwright en fallback. Lance `npm install` (inclut Playwright en dev) puis `npm start`.
+- **Vercel** : supporté via `api/index.js` + `vercel.json`. Le scraping utilise fetch HTTP (pas Playwright).
+  - **Sans configuration** : les données vont dans `/tmp` (effacées au redéploiement ou après inactivité).
+  - **Avec stockage persistant (recommandé)** : connecte **Vercel Postgres** + **Vercel Blob** au projet. L’app détecte automatiquement `POSTGRES_URL` et `BLOB_READ_WRITE_TOKEN` et persiste carrousels, banque d’images et titres.
+- **Render / Railway / Fly.io / VPS** : les données sont stockées dans `uploads/` sur le disque. Lance `npm install` (inclut Playwright en dev) puis `npm start`.
+
+### Persistance sur Vercel (Postgres + Blob)
+
+1. Ouvre ton projet sur [vercel.com](https://vercel.com) → **Storage**.
+2. Crée une base **Postgres** et un store **Blob**, puis **Connect** les deux au projet `tiktok-tool`.
+3. Redéploie (un push Git suffit). La barre en haut de l’app affiche « Données persistées (Postgres + Blob) ».
+4. Les images sont dans Blob ; les métadonnées (projets, titres, index des slides) dans Postgres. Les tables sont créées automatiquement au premier appel.
 
 ## Structure du projet
 
 ```
 src/
-  server.js      -> API Express (scrape, proxy image, banque d'images, export)
-  scraper.js      -> Logique Playwright d'extraction du carrousel
+  server.js      -> API Express (scrape, proxy image, banque, projets, titres)
+  scraper.js     -> Extraction du carrousel TikTok (fetch HTTP + Playwright en local)
+  store/         -> Couche de stockage (filesystem local ou Postgres + Blob sur Vercel)
 public/
   index.html       -> Interface (extraction, galerie, banque, éditeur, export)
   app.js           -> Logique frontend (éditeur canvas, appels API)

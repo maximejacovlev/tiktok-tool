@@ -26,6 +26,9 @@ header {
 }
 h1 { margin: 0 0 6px; font-size: 26px; }
 .subtitle { color: var(--muted); margin: 0; font-size: 14px; }
+.storage-status { margin: 8px 0 0; font-size: 13px; color: var(--muted); }
+.storage-status.persistent { color: #3dd68c; }
+.storage-status.ephemeral { color: #f0a050; }
 
 .app-layout {
   display: grid;

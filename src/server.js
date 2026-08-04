@@ -6,6 +6,7 @@ const fetch = require('node-fetch');
 const archiver = require('archiver');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const { scrapeCarousel } = require('./scraper');
+const { getStore } = require('./store');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,22 +16,61 @@ const proxyAgent = PROXY_SERVER ? new HttpsProxyAgent(PROXY_SERVER) : undefined;
 
 const IS_VERCEL = !!process.env.VERCEL;
 const APP_ROOT = path.join(__dirname, '..');
-const DATA_ROOT = IS_VERCEL ? path.join('/tmp', 'tiktok-tool') : APP_ROOT;
-const BANK_DIR = path.join(DATA_ROOT, 'uploads', 'bank');
-const EXPORT_DIR = path.join(DATA_ROOT, 'uploads', 'exports');
-const PROJECTS_DIR = path.join(DATA_ROOT, 'uploads', 'projects');
-const TITLES_FILE = path.join(DATA_ROOT, 'uploads', 'titles.json');
-const PROJECT_STATUSES = ['to_edit', 'wip', 'ready_to_post', 'posted'];
-
-[BANK_DIR, EXPORT_DIR, PROJECTS_DIR].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
-if (!fs.existsSync(TITLES_FILE)) fs.writeFileSync(TITLES_FILE, '[]');
 
 app.use(express.json({ limit: IS_VERCEL ? '4mb' : '50mb' }));
 app.use(express.static(path.join(APP_ROOT, 'public')));
-app.use('/bank-files', express.static(BANK_DIR));
-app.use('/project-files', express.static(PROJECTS_DIR));
 
-// ---------- 1. Scrape a TikTok carousel link ----------
+const memoryUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 },
+});
+
+const slideUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 4 * 1024 * 1024 },
+});
+
+async function withStore(res, fn) {
+  try {
+    const store = await getStore();
+    return await fn(store);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || 'Erreur serveur.' });
+    return null;
+  }
+}
+
+// Static files for local filesystem storage only
+app.use(async (req, res, next) => {
+  const store = await getStore();
+  if (store.kind === 'filesystem') {
+    if (req.path.startsWith('/bank-files/')) {
+      return express.static(store.BANK_DIR)(req, res, next);
+    }
+    if (req.path.startsWith('/project-files/')) {
+      return express.static(store.PROJECTS_DIR)(req, res, next);
+    }
+  }
+  next();
+});
+
+// ---------- Storage status ----------
+app.get('/api/storage', async (req, res) => {
+  const store = await getStore();
+  res.json({
+    kind: store.kind,
+    persistent: store.kind === 'postgres',
+    hint:
+      store.kind === 'postgres'
+        ? 'Données persistées (Postgres + Blob).'
+        : IS_VERCEL
+          ? 'Données temporaires — ajoute Postgres + Blob dans le dashboard Vercel.'
+          : 'Données locales dans uploads/.',
+  });
+});
+
+// ---------- 1. Scrape ----------
 app.post('/api/scrape', async (req, res) => {
   const { url } = req.body || {};
   if (!url || !/tiktok\.com/i.test(url)) {
@@ -45,7 +85,7 @@ app.post('/api/scrape', async (req, res) => {
   }
 });
 
-// ---------- 2. Proxy-download a single remote image (avoids hotlink/CORS issues) ----------
+// ---------- 2. Proxy image ----------
 app.get('/api/image', async (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).send('missing url');
@@ -67,273 +107,145 @@ app.get('/api/image', async (req, res) => {
 });
 
 // ---------- 3. Image bank ----------
-const bankStorage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, BANK_DIR),
-  filename: (req, file, cb) => {
-    const safe = Date.now() + '-' + file.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-    cb(null, safe);
-  },
-});
-const bankUpload = multer({ storage: bankStorage, limits: { fileSize: 15 * 1024 * 1024 } });
-
-const slideUpload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => {
-      const id = path.basename(req.params.id);
-      const dir = path.join(projectDir(id), 'slides');
-      fs.mkdirSync(dir, { recursive: true });
-      cb(null, dir);
-    },
-    filename: (req, file, cb) => {
-      const idx = parseInt(req.params.index, 10) + 1;
-      const ext = file.mimetype === 'image/jpeg' ? '.jpg' : '.png';
-      cb(null, `slide-${idx}${ext}`);
-    },
-  }),
-  limits: { fileSize: 4 * 1024 * 1024 },
+app.post('/api/bank/upload', memoryUpload.array('images', 30), async (req, res) => {
+  await withStore(res, async (store) => {
+    const files = await store.addBankFiles(req.files || []);
+    res.json({ files });
+  });
 });
 
-app.post('/api/bank/upload', bankUpload.array('images', 30), (req, res) => {
-  const files = (req.files || []).map((f) => ({ filename: f.filename, url: `/bank-files/${f.filename}` }));
-  res.json({ files });
+app.get('/api/bank', async (req, res) => {
+  await withStore(res, async (store) => {
+    res.json({ files: await store.listBank() });
+  });
 });
 
-app.get('/api/bank', (req, res) => {
-  const files = fs.readdirSync(BANK_DIR).filter((f) => !f.startsWith('.'));
-  res.json({ files: files.map((f) => ({ filename: f, url: `/bank-files/${f}` })) });
+app.delete('/api/bank/:filename', async (req, res) => {
+  await withStore(res, async (store) => {
+    await store.deleteBankFile(req.params.filename);
+    res.json({ ok: true });
+  });
 });
 
-app.delete('/api/bank/:filename', (req, res) => {
-  const p = path.join(BANK_DIR, path.basename(req.params.filename));
-  if (fs.existsSync(p)) fs.unlinkSync(p);
-  res.json({ ok: true });
-});
-
-// ---------- 4. Export edited slides (client sends PNG data URLs) ----------
-app.post('/api/export', (req, res) => {
+// ---------- 4. Export (local filesystem fallback) ----------
+app.post('/api/export', async (req, res) => {
   const { postName, slides } = req.body || {};
   if (!Array.isArray(slides) || !slides.length) {
     return res.status(400).json({ error: 'Aucune slide à exporter.' });
   }
-  const safeName = (postName || `post-${Date.now()}`).replace(/[^a-zA-Z0-9\-_]/g, '_');
-  const dir = path.join(EXPORT_DIR, safeName);
-  fs.mkdirSync(dir, { recursive: true });
-
-  slides.forEach((dataUrl, idx) => {
-    const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
-    fs.writeFileSync(path.join(dir, `slide-${idx + 1}.png`), Buffer.from(base64, 'base64'));
+  await withStore(res, async (store) => {
+    if (store.kind !== 'filesystem') {
+      return res.status(400).json({ error: 'Utilise le bouton Télécharger ZIP (export navigateur).' });
+    }
+    const safeName = (postName || `post-${Date.now()}`).replace(/[^a-zA-Z0-9\-_]/g, '_');
+    await store.saveExportSlides(safeName, slides);
+    res.json({ ok: true, folder: safeName, downloadZip: `/api/export/${safeName}.zip` });
   });
-
-  res.json({ ok: true, folder: safeName, downloadZip: `/api/export/${safeName}.zip` });
 });
 
-app.get('/api/export/:name.zip', (req, res) => {
-  const dir = path.join(EXPORT_DIR, path.basename(req.params.name));
-  if (!fs.existsSync(dir)) return res.status(404).send('not found');
-  res.attachment(`${path.basename(req.params.name)}.zip`);
-  const archive = archiver('zip');
-  archive.directory(dir, false);
-  archive.pipe(res);
-  archive.finalize();
-});
-
-// ---------- 5. Saved carousel projects ----------
-function projectDir(id) {
-  return path.join(PROJECTS_DIR, path.basename(id));
-}
-
-function readProjectMeta(id) {
-  const metaPath = path.join(projectDir(id), 'meta.json');
-  if (!fs.existsSync(metaPath)) return null;
-  return JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-}
-
-function writeProjectSlide(id, index, dataUrl) {
-  const slidesDir = path.join(projectDir(id), 'slides');
-  fs.mkdirSync(slidesDir, { recursive: true });
-  const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
-  fs.writeFileSync(
-    path.join(slidesDir, `slide-${index + 1}.png`),
-    Buffer.from(base64, 'base64')
-  );
-}
-
-function trimProjectSlides(id, totalCount) {
-  const slidesDir = path.join(projectDir(id), 'slides');
-  if (!fs.existsSync(slidesDir)) return;
-  listSlideFiles(slidesDir).forEach((f) => {
-    const num = parseInt(f.match(/\d+/)?.[0], 10);
-    if (num > totalCount) fs.unlinkSync(path.join(slidesDir, f));
+app.get('/api/export/:name.zip', async (req, res) => {
+  await withStore(res, async (store) => {
+    const dir = store.getExportDir(req.params.name);
+    if (!dir || !fs.existsSync(dir)) return res.status(404).send('not found');
+    res.attachment(`${path.basename(req.params.name)}.zip`);
+    const archive = archiver('zip');
+    archive.directory(dir, false);
+    archive.pipe(res);
+    archive.finalize();
   });
-}
+});
 
-function listSlideFiles(slidesDir) {
-  if (!fs.existsSync(slidesDir)) return [];
-  return fs
-    .readdirSync(slidesDir)
-    .filter((f) => /^slide-\d+\.(png|jpe?g)$/i.test(f))
-    .sort((a, b) => {
-      const na = parseInt(a.match(/\d+/)?.[0], 10);
-      const nb = parseInt(b.match(/\d+/)?.[0], 10);
-      return na - nb;
-    });
-}
-
-function projectToListItem(id) {
-  const meta = readProjectMeta(id);
-  if (!meta) return null;
-  const slidesDir = path.join(projectDir(id), 'slides');
-  const slideCount = listSlideFiles(slidesDir).length;
-  return { ...meta, slideCount };
-}
-
-app.get('/api/projects', (req, res) => {
-  const ids = fs.readdirSync(PROJECTS_DIR).filter((f) => {
-    if (f.startsWith('.')) return false;
-    return fs.existsSync(path.join(PROJECTS_DIR, f, 'meta.json'));
+// ---------- 5. Projects ----------
+app.get('/api/projects', async (req, res) => {
+  await withStore(res, async (store) => {
+    res.json({ projects: await store.listProjects() });
   });
-  const projects = ids
-    .map(projectToListItem)
-    .filter(Boolean)
-    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-  res.json({ projects });
 });
 
-app.get('/api/projects/:id', (req, res) => {
-  const id = path.basename(req.params.id);
-  const meta = readProjectMeta(id);
-  if (!meta) return res.status(404).json({ error: 'Carrousel introuvable.' });
-  const slidesDir = path.join(projectDir(id), 'slides');
-  const slideFiles = listSlideFiles(slidesDir);
-  const slides = slideFiles.map((filename, index) => ({
-    index,
-    url: `/project-files/${id}/slides/${filename}`,
-  }));
-  res.json({ ...meta, slides });
+app.get('/api/projects/:id', async (req, res) => {
+  await withStore(res, async (store) => {
+    const project = await store.getProject(path.basename(req.params.id));
+    if (!project) return res.status(404).json({ error: 'Carrousel introuvable.' });
+    res.json(project);
+  });
 });
 
-app.post('/api/projects', (req, res) => {
-  const { name, status, caption, sourceUrl, slides, slideCount } = req.body || {};
-  const count = Array.isArray(slides) ? slides.length : slideCount || 0;
-  if (!count) {
+app.post('/api/projects', async (req, res) => {
+  const { name, status, caption, sourceUrl, slideCount } = req.body || {};
+  if (!slideCount) {
     return res.status(400).json({ error: 'Aucune slide à enregistrer.' });
   }
-  if (status && !PROJECT_STATUSES.includes(status)) {
-    return res.status(400).json({ error: 'Statut invalide.' });
-  }
-  const id = `project-${Date.now()}`;
-  const now = new Date().toISOString();
-  const safeName = (name || `carrousel-${Date.now()}`).replace(/[^a-zA-Z0-9\-_\s]/g, '_').trim();
-  const meta = {
-    id,
-    name: safeName,
-    status: status || 'to_edit',
-    caption: caption || '',
-    sourceUrl: sourceUrl || '',
-    createdAt: now,
-    updatedAt: now,
-  };
-  fs.mkdirSync(projectDir(id), { recursive: true });
-  fs.writeFileSync(path.join(projectDir(id), 'meta.json'), JSON.stringify(meta, null, 2));
-  fs.mkdirSync(path.join(projectDir(id), 'slides'), { recursive: true });
-  if (Array.isArray(slides) && slides.length) {
-    slides.forEach((dataUrl, idx) => writeProjectSlide(id, idx, dataUrl));
-  }
-  res.json({ ok: true, project: projectToListItem(id) });
+  await withStore(res, async (store) => {
+    if (status && !store.PROJECT_STATUSES.includes(status)) {
+      return res.status(400).json({ error: 'Statut invalide.' });
+    }
+    const project = await store.createProject({ name, status, caption, sourceUrl, slideCount });
+    res.json({ ok: true, project });
+  });
 });
 
-app.put('/api/projects/:id/slides/:index', slideUpload.single('slide'), (req, res) => {
+app.put('/api/projects/:id/slides/:index', slideUpload.single('slide'), async (req, res) => {
   const id = path.basename(req.params.id);
-  const meta = readProjectMeta(id);
-  if (!meta) return res.status(404).json({ error: 'Carrousel introuvable.' });
   const index = parseInt(req.params.index, 10);
   const totalCount = parseInt(req.query.totalCount, 10);
   if (!req.file) return res.status(400).json({ error: 'Slide manquante.' });
   if (Number.isNaN(index) || index < 0) {
     return res.status(400).json({ error: 'Index de slide invalide.' });
   }
-
-  meta.updatedAt = new Date().toISOString();
-  fs.writeFileSync(path.join(projectDir(id), 'meta.json'), JSON.stringify(meta, null, 2));
-
-  if (!Number.isNaN(totalCount) && index === totalCount - 1) {
-    trimProjectSlides(id, totalCount);
-  }
-
-  res.json({ ok: true, index });
+  await withStore(res, async (store) => {
+    const result = await store.saveSlide(id, index, req.file, totalCount);
+    res.json(result);
+  });
 });
 
-app.put('/api/projects/:id', (req, res) => {
+app.put('/api/projects/:id', async (req, res) => {
   const id = path.basename(req.params.id);
-  const meta = readProjectMeta(id);
-  if (!meta) return res.status(404).json({ error: 'Carrousel introuvable.' });
-  const { name, status, caption, sourceUrl, slides } = req.body || {};
-  if (status && !PROJECT_STATUSES.includes(status)) {
-    return res.status(400).json({ error: 'Statut invalide.' });
-  }
-  if (name) meta.name = name.replace(/[^a-zA-Z0-9\-_\s]/g, '_').trim();
-  if (status) meta.status = status;
-  if (caption !== undefined) meta.caption = caption;
-  if (sourceUrl !== undefined) meta.sourceUrl = sourceUrl;
-  meta.updatedAt = new Date().toISOString();
-  if (Array.isArray(slides) && slides.length) {
-    slides.forEach((dataUrl, idx) => writeProjectSlide(id, idx, dataUrl));
-    trimProjectSlides(id, slides.length);
-  }
-  fs.writeFileSync(path.join(projectDir(id), 'meta.json'), JSON.stringify(meta, null, 2));
-  res.json({ ok: true, project: projectToListItem(id) });
+  const { name, status, caption, sourceUrl } = req.body || {};
+  await withStore(res, async (store) => {
+    if (status && !store.PROJECT_STATUSES.includes(status)) {
+      return res.status(400).json({ error: 'Statut invalide.' });
+    }
+    const project = await store.updateProject(id, { name, status, caption, sourceUrl });
+    if (!project) return res.status(404).json({ error: 'Carrousel introuvable.' });
+    res.json({ ok: true, project });
+  });
 });
 
-app.delete('/api/projects/:id', (req, res) => {
+app.delete('/api/projects/:id', async (req, res) => {
   const id = path.basename(req.params.id);
-  const dir = projectDir(id);
-  if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Carrousel introuvable.' });
-  fs.rmSync(dir, { recursive: true, force: true });
-  res.json({ ok: true });
+  await withStore(res, async (store) => {
+    const ok = await store.deleteProject(id);
+    if (!ok) return res.status(404).json({ error: 'Carrousel introuvable.' });
+    res.json({ ok: true });
+  });
 });
 
-// ---------- 6. Title ideas ----------
-function readTitles() {
-  try {
-    return JSON.parse(fs.readFileSync(TITLES_FILE, 'utf8'));
-  } catch {
-    return [];
-  }
-}
-
-function writeTitles(titles) {
-  fs.writeFileSync(TITLES_FILE, JSON.stringify(titles, null, 2));
-}
-
-app.get('/api/titles', (req, res) => {
-  const titles = readTitles().sort(
-    (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
-  );
-  res.json({ titles });
+// ---------- 6. Titles ----------
+app.get('/api/titles', async (req, res) => {
+  await withStore(res, async (store) => {
+    res.json({ titles: await store.listTitles() });
+  });
 });
 
-app.post('/api/titles', (req, res) => {
-  const { text } = req.body || {};
-  const trimmed = (text || '').trim();
+app.post('/api/titles', async (req, res) => {
+  const trimmed = (req.body?.text || '').trim();
   if (!trimmed) return res.status(400).json({ error: 'Le titre ne peut pas être vide.' });
-  const titles = readTitles();
-  const item = { id: `title-${Date.now()}`, text: trimmed, createdAt: new Date().toISOString() };
-  titles.unshift(item);
-  writeTitles(titles);
-  res.json({ ok: true, title: item });
+  await withStore(res, async (store) => {
+    const title = await store.addTitle(trimmed);
+    res.json({ ok: true, title });
+  });
 });
 
-app.delete('/api/titles/:id', (req, res) => {
+app.delete('/api/titles/:id', async (req, res) => {
   const id = path.basename(req.params.id);
-  const titles = readTitles().filter((t) => t.id !== id);
-  if (titles.length === readTitles().length) {
-    return res.status(404).json({ error: 'Titre introuvable.' });
-  }
-  writeTitles(titles);
-  res.json({ ok: true });
+  await withStore(res, async (store) => {
+    const ok = await store.deleteTitle(id);
+    if (!ok) return res.status(404).json({ error: 'Titre introuvable.' });
+    res.json({ ok: true });
+  });
 });
 
-// SPA fallback (Vercel routes all traffic through this function)
+// SPA fallback
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api')) return next();
   res.sendFile(path.join(APP_ROOT, 'public', 'index.html'), (err) => {
@@ -344,7 +256,9 @@ app.get('*', (req, res, next) => {
 module.exports = app;
 
 if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`TikTok Carousel Tool running on http://localhost:${PORT}`);
+  getStore().then(() => {
+    app.listen(PORT, () => {
+      console.log(`TikTok Carousel Tool running on http://localhost:${PORT}`);
+    });
   });
 }

@@ -11,6 +11,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@vercel/blob": "^2.6.1",
+    "@vercel/postgres": "^0.10.0",
     "archiver": "^6.0.2",
     "express": "^4.22.2",
     "https-proxy-agent": "^7.0.6",
