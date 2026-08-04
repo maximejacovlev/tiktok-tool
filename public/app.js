@@ -194,13 +194,54 @@ function resetWorkSession() {
 async function collectSlideDataUrls() {
   const out = [];
   for (const s of slides) {
-    if (s.renderedDataUrl && s.renderedDataUrl.startsWith('data:')) {
-      out.push(s.renderedDataUrl);
-    } else {
-      out.push(await urlToPngDataUrl(getSlideDisplayUrl(s)));
-    }
+    out.push(await compressSlideDataUrl(getSlideDisplayUrl(s)));
   }
   return out;
+}
+
+async function compressSlideDataUrl(src) {
+  const blob = await compressSlideBlob(src);
+  return blobToDataUrl(blob);
+}
+
+async function compressSlideBlob(src, maxBytes = 3 * 1024 * 1024) {
+  const img = await loadImage(src);
+  const maxSide = 1080;
+  let w = img.naturalWidth;
+  let h = img.naturalHeight;
+  if (Math.max(w, h) > maxSide) {
+    if (w >= h) {
+      h = Math.round((h * maxSide) / w);
+      w = maxSide;
+    } else {
+      w = Math.round((w * maxSide) / h);
+      h = maxSide;
+    }
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+
+  for (const quality of [0.88, 0.78, 0.68, 0.58]) {
+    const blob = await canvasToBlob(canvas, 'image/jpeg', quality);
+    if (blob.size <= maxBytes) return blob;
+  }
+  return canvasToBlob(canvas, 'image/jpeg', 0.5);
+}
+
+function canvasToBlob(canvas, type, quality) {
+  return new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 }
 
 $('#btn-save-project').addEventListener('click', async () => {
@@ -220,7 +261,7 @@ $('#btn-save-project').addEventListener('click', async () => {
       status: $('#project-status').value,
       caption: currentProject.caption,
       sourceUrl: currentProject.sourceUrl,
-      slideCount: slideDataUrls.length,
+      slideCount: slides.length,
     };
 
     let projectId = currentProject.id;
@@ -245,16 +286,15 @@ $('#btn-save-project').addEventListener('click', async () => {
       if (!res.ok) throw new Error(data.error || 'Erreur enregistrement');
     }
 
-    for (let i = 0; i < slideDataUrls.length; i++) {
-      statusEl.textContent = `Enregistrement slide ${i + 1}/${slideDataUrls.length}...`;
-      const res = await fetch(`/api/projects/${projectId}/slides/${i}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          dataUrl: slideDataUrls[i],
-          totalCount: slideDataUrls.length,
-        }),
-      });
+    for (let i = 0; i < slides.length; i++) {
+      statusEl.textContent = `Enregistrement slide ${i + 1}/${slides.length}...`;
+      const blob = await compressSlideBlob(getSlideDisplayUrl(slides[i]));
+      const form = new FormData();
+      form.append('slide', blob, `slide-${i + 1}.jpg`);
+      const res = await fetch(
+        `/api/projects/${projectId}/slides/${i}?totalCount=${slides.length}`,
+        { method: 'PUT', body: form }
+      );
       const data = await parseJsonResponse(res);
       if (!res.ok) throw new Error(data.error || `Erreur slide ${i + 1}`);
     }
@@ -450,38 +490,44 @@ function triggerDownload(dataUrl, filename) {
   a.remove();
 }
 
-// ---------------- Export ZIP (optional) ----------------
+// ---------------- Export ZIP (client-side, avoids Vercel body limit) ----------------
 $('#btn-export-zip').addEventListener('click', async () => {
   const statusEl = $('#save-status');
   if (!slides.length) { statusEl.textContent = 'Aucune slide à exporter.'; return; }
+  if (typeof JSZip === 'undefined') {
+    statusEl.textContent = 'JSZip non chargé — rafraîchis la page.';
+    return;
+  }
 
   statusEl.textContent = 'Préparation du ZIP...';
   $('#btn-export-zip').disabled = true;
 
   try {
-    const slideDataUrls = await collectSlideDataUrls();
     const postName = $('#project-name').value.trim() || `post-${Date.now()}`;
-    const res = await fetch('/api/export', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ postName, slides: slideDataUrls }),
-    });
-    const data = await parseJsonResponse(res);
-    if (!res.ok) throw new Error(data.error || 'Erreur export');
-
-    const a = document.createElement('a');
-    a.href = data.downloadZip;
-    a.download = `${postName}.zip`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    statusEl.textContent = `ZIP téléchargé (${slideDataUrls.length} slides).`;
+    const zip = new JSZip();
+    for (let i = 0; i < slides.length; i++) {
+      statusEl.textContent = `Compression slide ${i + 1}/${slides.length}...`;
+      const pngBlob = await urlToPngBlob(getSlideDisplayUrl(slides[i]));
+      zip.file(`slide-${i + 1}.png`, pngBlob);
+    }
+    statusEl.textContent = 'Génération du ZIP...';
+    const content = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(content);
+    triggerDownload(url, `${postName}.zip`);
+    URL.revokeObjectURL(url);
+    statusEl.textContent = `ZIP téléchargé (${slides.length} slides).`;
   } catch (err) {
     statusEl.textContent = 'Erreur: ' + err.message;
   } finally {
     $('#btn-export-zip').disabled = false;
   }
 });
+
+async function urlToPngBlob(url) {
+  const dataUrl = await urlToPngDataUrl(url);
+  const res = await fetch(dataUrl);
+  return res.blob();
+}
 
 // ---------------- Image bank ----------------
 async function refreshBank() {

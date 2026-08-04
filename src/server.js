@@ -76,6 +76,23 @@ const bankStorage = multer.diskStorage({
 });
 const bankUpload = multer({ storage: bankStorage, limits: { fileSize: 15 * 1024 * 1024 } });
 
+const slideUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const id = path.basename(req.params.id);
+      const dir = path.join(projectDir(id), 'slides');
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+      const idx = parseInt(req.params.index, 10) + 1;
+      const ext = file.mimetype === 'image/jpeg' ? '.jpg' : '.png';
+      cb(null, `slide-${idx}${ext}`);
+    },
+  }),
+  limits: { fileSize: 4 * 1024 * 1024 },
+});
+
 app.post('/api/bank/upload', bankUpload.array('images', 30), (req, res) => {
   const files = (req.files || []).map((f) => ({ filename: f.filename, url: `/bank-files/${f.filename}` }));
   res.json({ files });
@@ -144,11 +161,21 @@ function writeProjectSlide(id, index, dataUrl) {
 function trimProjectSlides(id, totalCount) {
   const slidesDir = path.join(projectDir(id), 'slides');
   if (!fs.existsSync(slidesDir)) return;
-  fs.readdirSync(slidesDir)
-    .filter((f) => f.endsWith('.png'))
-    .forEach((f) => {
-      const num = parseInt(f.replace('slide-', '').replace('.png', ''), 10);
-      if (num > totalCount) fs.unlinkSync(path.join(slidesDir, f));
+  listSlideFiles(slidesDir).forEach((f) => {
+    const num = parseInt(f.match(/\d+/)?.[0], 10);
+    if (num > totalCount) fs.unlinkSync(path.join(slidesDir, f));
+  });
+}
+
+function listSlideFiles(slidesDir) {
+  if (!fs.existsSync(slidesDir)) return [];
+  return fs
+    .readdirSync(slidesDir)
+    .filter((f) => /^slide-\d+\.(png|jpe?g)$/i.test(f))
+    .sort((a, b) => {
+      const na = parseInt(a.match(/\d+/)?.[0], 10);
+      const nb = parseInt(b.match(/\d+/)?.[0], 10);
+      return na - nb;
     });
 }
 
@@ -156,9 +183,7 @@ function projectToListItem(id) {
   const meta = readProjectMeta(id);
   if (!meta) return null;
   const slidesDir = path.join(projectDir(id), 'slides');
-  const slideCount = fs.existsSync(slidesDir)
-    ? fs.readdirSync(slidesDir).filter((f) => f.endsWith('.png')).length
-    : 0;
+  const slideCount = listSlideFiles(slidesDir).length;
   return { ...meta, slideCount };
 }
 
@@ -179,9 +204,7 @@ app.get('/api/projects/:id', (req, res) => {
   const meta = readProjectMeta(id);
   if (!meta) return res.status(404).json({ error: 'Carrousel introuvable.' });
   const slidesDir = path.join(projectDir(id), 'slides');
-  const slideFiles = fs.existsSync(slidesDir)
-    ? fs.readdirSync(slidesDir).filter((f) => f.endsWith('.png')).sort()
-    : [];
+  const slideFiles = listSlideFiles(slidesDir);
   const slides = slideFiles.map((filename, index) => ({
     index,
     url: `/project-files/${id}/slides/${filename}`,
@@ -219,22 +242,21 @@ app.post('/api/projects', (req, res) => {
   res.json({ ok: true, project: projectToListItem(id) });
 });
 
-app.put('/api/projects/:id/slides/:index', (req, res) => {
+app.put('/api/projects/:id/slides/:index', slideUpload.single('slide'), (req, res) => {
   const id = path.basename(req.params.id);
   const meta = readProjectMeta(id);
   if (!meta) return res.status(404).json({ error: 'Carrousel introuvable.' });
   const index = parseInt(req.params.index, 10);
-  const { dataUrl, totalCount } = req.body || {};
-  if (!dataUrl) return res.status(400).json({ error: 'Slide manquante.' });
+  const totalCount = parseInt(req.query.totalCount, 10);
+  if (!req.file) return res.status(400).json({ error: 'Slide manquante.' });
   if (Number.isNaN(index) || index < 0) {
     return res.status(400).json({ error: 'Index de slide invalide.' });
   }
 
-  writeProjectSlide(id, index, dataUrl);
   meta.updatedAt = new Date().toISOString();
   fs.writeFileSync(path.join(projectDir(id), 'meta.json'), JSON.stringify(meta, null, 2));
 
-  if (typeof totalCount === 'number' && index === totalCount - 1) {
+  if (!Number.isNaN(totalCount) && index === totalCount - 1) {
     trimProjectSlides(id, totalCount);
   }
 
