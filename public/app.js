@@ -577,13 +577,22 @@ function renderBankGrid(container, opts = {}) {
   });
 }
 
-function fileToBase64(file) {
+function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).split(',')[1]);
     reader.onerror = reject;
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(blob);
   });
+}
+
+async function compressFileForUpload(file) {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    return await compressSlideBlob(objectUrl);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 $('#bank-file-input').addEventListener('change', async (e) => {
@@ -591,16 +600,18 @@ $('#bank-file-input').addEventListener('change', async (e) => {
   if (!files.length) return;
 
   for (const f of files) {
-    if (f.size > 3 * 1024 * 1024) {
-      alert(`${f.name} est trop lourd (max ~3 Mo). Compresse l'image ou utilise un PNG plus petit.`);
-      continue;
-    }
     try {
-      const data = await fileToBase64(f);
+      const blob = await compressFileForUpload(f);
+      const data = await blobToBase64(blob);
+      const baseName = f.name.replace(/\.[^.]+$/, '') || 'image';
       const res = await fetch('/api/bank/upload-json', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: f.name, mimeType: f.type, data }),
+        body: JSON.stringify({
+          filename: `${baseName}.jpg`,
+          mimeType: 'image/jpeg',
+          data,
+        }),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) alert(payload.error || `Upload échoué pour ${f.name}.`);
