@@ -25,7 +25,7 @@ const PROJECT_STATUSES = ['to_edit', 'wip', 'ready_to_post', 'posted'];
 [BANK_DIR, EXPORT_DIR, PROJECTS_DIR].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
 if (!fs.existsSync(TITLES_FILE)) fs.writeFileSync(TITLES_FILE, '[]');
 
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: IS_VERCEL ? '4mb' : '50mb' }));
 app.use(express.static(path.join(APP_ROOT, 'public')));
 app.use('/bank-files', express.static(BANK_DIR));
 app.use('/project-files', express.static(PROJECTS_DIR));
@@ -131,18 +131,25 @@ function readProjectMeta(id) {
   return JSON.parse(fs.readFileSync(metaPath, 'utf8'));
 }
 
-function writeProjectSlides(id, slides) {
+function writeProjectSlide(id, index, dataUrl) {
   const slidesDir = path.join(projectDir(id), 'slides');
   fs.mkdirSync(slidesDir, { recursive: true });
-  const existing = fs.readdirSync(slidesDir).filter((f) => f.endsWith('.png'));
-  existing.forEach((f) => fs.unlinkSync(path.join(slidesDir, f)));
-  slides.forEach((dataUrl, idx) => {
-    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
-    fs.writeFileSync(
-      path.join(slidesDir, `slide-${idx + 1}.png`),
-      Buffer.from(base64, 'base64')
-    );
-  });
+  const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+  fs.writeFileSync(
+    path.join(slidesDir, `slide-${index + 1}.png`),
+    Buffer.from(base64, 'base64')
+  );
+}
+
+function trimProjectSlides(id, totalCount) {
+  const slidesDir = path.join(projectDir(id), 'slides');
+  if (!fs.existsSync(slidesDir)) return;
+  fs.readdirSync(slidesDir)
+    .filter((f) => f.endsWith('.png'))
+    .forEach((f) => {
+      const num = parseInt(f.replace('slide-', '').replace('.png', ''), 10);
+      if (num > totalCount) fs.unlinkSync(path.join(slidesDir, f));
+    });
 }
 
 function projectToListItem(id) {
@@ -183,8 +190,9 @@ app.get('/api/projects/:id', (req, res) => {
 });
 
 app.post('/api/projects', (req, res) => {
-  const { name, status, caption, sourceUrl, slides } = req.body || {};
-  if (!Array.isArray(slides) || !slides.length) {
+  const { name, status, caption, sourceUrl, slides, slideCount } = req.body || {};
+  const count = Array.isArray(slides) ? slides.length : slideCount || 0;
+  if (!count) {
     return res.status(400).json({ error: 'Aucune slide à enregistrer.' });
   }
   if (status && !PROJECT_STATUSES.includes(status)) {
@@ -204,8 +212,33 @@ app.post('/api/projects', (req, res) => {
   };
   fs.mkdirSync(projectDir(id), { recursive: true });
   fs.writeFileSync(path.join(projectDir(id), 'meta.json'), JSON.stringify(meta, null, 2));
-  writeProjectSlides(id, slides);
+  fs.mkdirSync(path.join(projectDir(id), 'slides'), { recursive: true });
+  if (Array.isArray(slides) && slides.length) {
+    slides.forEach((dataUrl, idx) => writeProjectSlide(id, idx, dataUrl));
+  }
   res.json({ ok: true, project: projectToListItem(id) });
+});
+
+app.put('/api/projects/:id/slides/:index', (req, res) => {
+  const id = path.basename(req.params.id);
+  const meta = readProjectMeta(id);
+  if (!meta) return res.status(404).json({ error: 'Carrousel introuvable.' });
+  const index = parseInt(req.params.index, 10);
+  const { dataUrl, totalCount } = req.body || {};
+  if (!dataUrl) return res.status(400).json({ error: 'Slide manquante.' });
+  if (Number.isNaN(index) || index < 0) {
+    return res.status(400).json({ error: 'Index de slide invalide.' });
+  }
+
+  writeProjectSlide(id, index, dataUrl);
+  meta.updatedAt = new Date().toISOString();
+  fs.writeFileSync(path.join(projectDir(id), 'meta.json'), JSON.stringify(meta, null, 2));
+
+  if (typeof totalCount === 'number' && index === totalCount - 1) {
+    trimProjectSlides(id, totalCount);
+  }
+
+  res.json({ ok: true, index });
 });
 
 app.put('/api/projects/:id', (req, res) => {
@@ -221,7 +254,10 @@ app.put('/api/projects/:id', (req, res) => {
   if (caption !== undefined) meta.caption = caption;
   if (sourceUrl !== undefined) meta.sourceUrl = sourceUrl;
   meta.updatedAt = new Date().toISOString();
-  if (Array.isArray(slides) && slides.length) writeProjectSlides(id, slides);
+  if (Array.isArray(slides) && slides.length) {
+    slides.forEach((dataUrl, idx) => writeProjectSlide(id, idx, dataUrl));
+    trimProjectSlides(id, slides.length);
+  }
   fs.writeFileSync(path.join(projectDir(id), 'meta.json'), JSON.stringify(meta, null, 2));
   res.json({ ok: true, project: projectToListItem(id) });
 });

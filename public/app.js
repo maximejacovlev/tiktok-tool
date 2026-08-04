@@ -51,6 +51,18 @@ function newSlideId() {
   return nextSlideId++;
 }
 
+async function parseJsonResponse(res) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    if (/request entity too large/i.test(text)) {
+      throw new Error('Requête trop volumineuse (limite Vercel ~4 Mo). Réessaie avec moins de slides ou des images plus légères.');
+    }
+    throw new Error(text.slice(0, 150) || `Erreur serveur (${res.status})`);
+  }
+}
+
 function setupDropZone(el, onDrop) {
   el.addEventListener('dragover', (e) => {
     e.preventDefault();
@@ -203,33 +215,54 @@ $('#btn-save-project').addEventListener('click', async () => {
 
   try {
     const slideDataUrls = await collectSlideDataUrls();
-    const payload = {
+    const meta = {
       name: $('#project-name').value.trim() || `carrousel-${Date.now()}`,
       status: $('#project-status').value,
       caption: currentProject.caption,
       sourceUrl: currentProject.sourceUrl,
-      slides: slideDataUrls,
+      slideCount: slideDataUrls.length,
     };
 
-    const isUpdate = !!currentProject.id;
-    const res = await fetch(
-      isUpdate ? `/api/projects/${currentProject.id}` : '/api/projects',
-      {
-        method: isUpdate ? 'PUT' : 'POST',
+    let projectId = currentProject.id;
+
+    if (!projectId) {
+      const res = await fetch('/api/projects', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      }
-    );
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Erreur enregistrement');
-
-    if (!isUpdate && data.project) {
-      currentProject.id = data.project.id;
+        body: JSON.stringify(meta),
+      });
+      const data = await parseJsonResponse(res);
+      if (!res.ok) throw new Error(data.error || 'Erreur enregistrement');
+      projectId = data.project.id;
+      currentProject.id = projectId;
+    } else {
+      const res = await fetch(`/api/projects/${projectId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(meta),
+      });
+      const data = await parseJsonResponse(res);
+      if (!res.ok) throw new Error(data.error || 'Erreur enregistrement');
     }
-    currentProject.name = payload.name;
-    currentProject.status = payload.status;
 
-    statusEl.textContent = `Carrousel enregistré (${slides.length} slides) — statut : ${STATUS_LABELS[payload.status]}.`;
+    for (let i = 0; i < slideDataUrls.length; i++) {
+      statusEl.textContent = `Enregistrement slide ${i + 1}/${slideDataUrls.length}...`;
+      const res = await fetch(`/api/projects/${projectId}/slides/${i}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dataUrl: slideDataUrls[i],
+          totalCount: slideDataUrls.length,
+        }),
+      });
+      const data = await parseJsonResponse(res);
+      if (!res.ok) throw new Error(data.error || `Erreur slide ${i + 1}`);
+    }
+
+    currentProject.name = meta.name;
+    currentProject.status = meta.status;
+
+    statusEl.textContent = `Carrousel enregistré (${slides.length} slides) — statut : ${STATUS_LABELS[meta.status]}.`;
     refreshProjects();
   } catch (err) {
     statusEl.textContent = 'Erreur: ' + err.message;
@@ -257,7 +290,7 @@ $('#btn-scrape').addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url }),
     });
-    const data = await res.json();
+    const data = await parseJsonResponse(res);
     if (!res.ok) throw new Error(data.error || 'Erreur inconnue');
 
     currentProject = {
@@ -433,7 +466,7 @@ $('#btn-export-zip').addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ postName, slides: slideDataUrls }),
     });
-    const data = await res.json();
+    const data = await parseJsonResponse(res);
     if (!res.ok) throw new Error(data.error || 'Erreur export');
 
     const a = document.createElement('a');
