@@ -1,6 +1,6 @@
 const { sql } = require('@vercel/postgres');
-const { put, del } = require('@vercel/blob');
 const { PROJECT_STATUSES } = require('./constants');
+const blobStore = require('./blob');
 
 let ready = false;
 
@@ -17,7 +17,7 @@ function getEnvStatus() {
   ensurePostgresEnv();
   return {
     postgres: !!(process.env.POSTGRES_URL || process.env.DATABASE_URL),
-    blob: !!process.env.BLOB_READ_WRITE_TOKEN,
+    blob: blobStore.isBlobConfigured(),
   };
 }
 
@@ -101,7 +101,10 @@ async function getProject(id) {
     WHERE project_id = ${id} ORDER BY slide_index ASC
   `;
   const project = rowToProject(rows[0], slideRows.length);
-  project.slides = slideRows.map((s) => ({ index: s.slide_index, url: s.file_url }));
+  project.slides = slideRows.map((s) => ({
+    index: s.slide_index,
+    url: blobStore.toClientUrl(s.file_url),
+  }));
   return project;
 }
 
@@ -137,7 +140,7 @@ async function deleteProject(id) {
   `;
   for (const s of slides) {
     try {
-      await del(s.file_url);
+      await blobStore.del(s.file_url);
     } catch {
       /* ignore missing blob */
     }
@@ -152,10 +155,8 @@ async function saveSlide(id, index, file, totalCount) {
 
   const ext = file.mimetype === 'image/jpeg' ? 'jpg' : 'png';
   const pathname = `projects/${id}/slide-${index + 1}.${ext}`;
-  const blob = await put(pathname, file.buffer, {
-    access: 'public',
+  const blob = await blobStore.uploadBlob(pathname, file.buffer, {
     contentType: file.mimetype || 'image/jpeg',
-    addRandomSuffix: false,
   });
 
   const { rows: old } = await sql`
@@ -163,7 +164,7 @@ async function saveSlide(id, index, file, totalCount) {
   `;
   if (old[0]?.file_url && old[0].file_url !== blob.url) {
     try {
-      await del(old[0].file_url);
+      await blobStore.del(old[0].file_url);
     } catch {
       /* ignore */
     }
@@ -184,7 +185,7 @@ async function saveSlide(id, index, file, totalCount) {
     `;
     for (const row of extras) {
       try {
-        await del(row.file_url);
+        await blobStore.del(row.file_url);
       } catch {
         /* ignore */
       }
@@ -197,19 +198,18 @@ async function saveSlide(id, index, file, totalCount) {
 
 async function listBank() {
   const { rows } = await sql`SELECT id, file_url FROM bank_images ORDER BY created_at DESC`;
-  return rows.map((r) => ({ filename: r.id, url: r.file_url }));
+  return rows.map((r) => ({ filename: r.id, url: blobStore.toClientUrl(r.file_url) }));
 }
 
 async function addBankFiles(files) {
   const out = [];
   for (const f of files) {
     const id = `${Date.now()}-${f.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
-    const blob = await put(`bank/${id}`, f.buffer, {
-      access: 'public',
+    const blob = await blobStore.uploadBlob(`bank/${id}`, f.buffer, {
       contentType: f.mimetype,
     });
     await sql`INSERT INTO bank_images (id, file_url) VALUES (${id}, ${blob.url})`;
-    out.push({ filename: id, url: blob.url });
+    out.push({ filename: id, url: blobStore.toClientUrl(blob.url) });
   }
   return out;
 }
@@ -219,7 +219,7 @@ async function deleteBankFile(filename) {
   const { rows } = await sql`SELECT file_url FROM bank_images WHERE id = ${id}`;
   if (!rows.length) return;
   try {
-    await del(rows[0].file_url);
+    await blobStore.del(rows[0].file_url);
   } catch {
     /* ignore */
   }

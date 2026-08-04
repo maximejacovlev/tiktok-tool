@@ -7,7 +7,7 @@ const archiver = require('archiver');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const { scrapeCarousel } = require('./scraper');
 const { getStore } = require('./store');
-const postgresStore = require('./store/postgres');
+const blobStore = require('./store/blob');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -56,9 +56,28 @@ app.use(async (req, res, next) => {
   next();
 });
 
+// ---------- Blob proxy (private stores) ----------
+app.get('/api/blob', async (req, res) => {
+  const { url } = req.query;
+  if (!url || !String(url).includes('blob.vercel-storage.com')) {
+    return res.status(400).send('invalid url');
+  }
+  try {
+    const result = await blobStore.streamBlob(String(url));
+    if (!result) return res.status(404).send('not found');
+    res.set('Content-Type', result.blob.contentType || 'image/jpeg');
+    res.set('Cache-Control', 'public, max-age=31536000, immutable');
+    result.stream.pipe(res);
+  } catch (err) {
+    console.error('Blob proxy error:', err);
+    res.status(404).send('not found');
+  }
+});
+
 // ---------- Storage status ----------
 app.get('/api/storage', async (req, res) => {
   const store = await getStore();
+  const postgresStore = require('./store/postgres');
   const env = postgresStore.getEnvStatus();
   res.json({
     kind: store.kind,
