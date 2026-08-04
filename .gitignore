@@ -1,0 +1,10 @@
+node_modules/
+uploads/bank/*
+!uploads/bank/.gitkeep
+uploads/exports/*
+!uploads/exports/.gitkeep
+uploads/projects/*
+!uploads/projects/.gitkeep
+uploads/titles.json
+.DS_Store
+.env

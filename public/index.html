@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TikTok Carousel Tool</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>TikTok Carousel Tool</h1>
+    <p class="subtitle">Extrais un carrousel TikTok, ajoute tes slides depuis la banque, enregistre ton travail et exporte quand tu es prêt.</p>
+  </header>
+
+  <div class="app-layout">
+    <aside class="sidebar sidebar-left card">
+      <h2>Mes carrousels</h2>
+      <p class="hint">Clique pour charger un carrousel.</p>
+      <div id="projects-list" class="projects-list"></div>
+      <p id="projects-empty" class="status">Aucun carrousel enregistré.</p>
+    </aside>
+
+    <main class="main-content">
+      <section id="step-scrape" class="card">
+        <h2>1. Extraire un carrousel TikTok</h2>
+        <div class="row">
+          <input id="tiktok-url" type="text" placeholder="https://vm.tiktok.com/… ou https://www.tiktok.com/@compte/photo/123…" />
+          <button id="btn-scrape">Extraire les slides</button>
+        </div>
+        <p id="scrape-status" class="status"></p>
+      </section>
+
+      <section id="step-slides" class="card hidden">
+        <h2>2. Carrousel en cours</h2>
+        <div class="row project-controls">
+          <input id="project-name" type="text" placeholder="Nom du carrousel (ex: promo-aout)" />
+          <select id="project-status">
+            <option value="to_edit">À éditer</option>
+            <option value="wip">WIP</option>
+            <option value="ready_to_post">Prêt à poster</option>
+            <option value="posted">Publié</option>
+          </select>
+          <button id="btn-save-project" class="primary">Enregistrer</button>
+          <button id="btn-export-zip" class="secondary">Télécharger ZIP</button>
+        </div>
+        <p id="save-status" class="status"></p>
+        <p class="hint">Glisse une image depuis la banque pour l'ajouter. Utilise ← → pour réordonner les slides.</p>
+        <div id="slides-grid" class="grid drop-zone"></div>
+      </section>
+
+      <section id="step-bank" class="card">
+        <h2>Banque d'images</h2>
+        <p class="hint">Images au format slide final — glisse-les dans le carrousel en cours.</p>
+        <input id="bank-file-input" type="file" accept="image/*" multiple />
+        <div id="bank-grid" class="grid small"></div>
+      </section>
+    </main>
+
+    <aside class="sidebar sidebar-right card">
+      <h2>Mes titres</h2>
+      <p class="hint">Idées de titres pour tes futurs posts.</p>
+      <div class="row titles-add">
+        <input id="title-input" type="text" placeholder="Nouvelle idée de titre…" />
+        <button id="btn-add-title">Ajouter</button>
+      </div>
+      <div id="titles-list" class="titles-list"></div>
+      <p id="titles-empty" class="status">Aucun titre enregistré.</p>
+    </aside>
+  </div>
+
+  <!-- Editor modal -->
+  <div id="editor-modal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Éditer la slide <span id="editor-slide-index"></span></h3>
+        <button id="editor-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="canvas-wrap">
+          <canvas id="editor-canvas"></canvas>
+        </div>
+        <div class="editor-sidebar">
+          <h4>Banque d'images</h4>
+          <div id="editor-bank-grid" class="grid small"></div>
+          <p class="hint">Clique une image pour l'ajouter en calque sur la slide (overlay).</p>
+          <button id="btn-remove-overlay">Supprimer le calque sélectionné</button>
+          <hr />
+          <button id="btn-save-slide" class="primary">Enregistrer cette slide</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
