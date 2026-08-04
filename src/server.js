@@ -57,21 +57,29 @@ app.use(async (req, res, next) => {
 });
 
 // ---------- Blob proxy (private stores) ----------
-app.get('/api/blob', async (req, res) => {
-  const { url } = req.query;
-  if (!url || !String(url).includes('blob.vercel-storage.com')) {
-    return res.status(400).send('invalid url');
-  }
+async function serveBlob(req, res) {
+  const pathname = req.blobPathname;
+  const queryUrl = req.query.url && String(req.query.url);
+  const target = pathname || queryUrl;
+
+  if (!target) return res.status(400).send('missing blob');
+
   try {
-    const result = await blobStore.streamBlob(String(url));
+    const result = await blobStore.readBlobBuffer(target);
     if (!result) return res.status(404).send('not found');
-    res.set('Content-Type', result.blob.contentType || 'image/jpeg');
+    res.set('Content-Type', result.contentType);
     res.set('Cache-Control', 'public, max-age=31536000, immutable');
-    result.stream.pipe(res);
+    res.send(result.buffer);
   } catch (err) {
-    console.error('Blob proxy error:', err);
+    console.error('Blob proxy error:', err.message || err);
     res.status(404).send('not found');
   }
+}
+
+app.get('/api/blob', serveBlob);
+app.get(/^\/api\/blob\/(.+)$/, (req, res) => {
+  req.blobPathname = decodeURIComponent(req.params[0]);
+  return serveBlob(req, res);
 });
 
 // ---------- Storage status ----------
