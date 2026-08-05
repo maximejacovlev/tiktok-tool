@@ -16,6 +16,13 @@ function isConfigured() {
   return !!(process.env.TIKTOK_CLIENT_KEY && process.env.TIKTOK_CLIENT_SECRET);
 }
 
+/** TikTok API v2 always includes error: { code: "ok" } on success. */
+function isTikTokApiError(data) {
+  if (!data?.error) return false;
+  if (typeof data.error === 'string') return true;
+  return data.error.code !== 'ok';
+}
+
 function getRedirectUri(req) {
   if (process.env.TIKTOK_REDIRECT_URI) return process.env.TIKTOK_REDIRECT_URI;
   const host = process.env.VERCEL_URL
@@ -49,7 +56,7 @@ async function exchangeCodeForToken(code, redirectUri) {
     }),
   });
   const data = await res.json();
-  if (!res.ok || data.error) {
+  if (!res.ok || isTikTokApiError(data)) {
     throw new Error(data.error_description || data.error?.message || 'Échec OAuth TikTok.');
   }
   return data;
@@ -67,7 +74,7 @@ async function refreshAccessToken(refreshToken) {
     }),
   });
   const data = await res.json();
-  if (!res.ok || data.error) {
+  if (!res.ok || isTikTokApiError(data)) {
     throw new Error(data.error_description || data.error?.message || 'Refresh token TikTok échoué.');
   }
   return data;
@@ -85,7 +92,7 @@ async function queryVideoMetrics(accessToken, videoIds) {
     body: JSON.stringify({ filters: { video_ids: videoIds.slice(0, 20) } }),
   });
   const data = await res.json();
-  if (!res.ok || data.error) {
+  if (!res.ok || isTikTokApiError(data)) {
     throw new Error(data.error?.message || data.error?.code || 'Requête analytics TikTok échouée.');
   }
   return data.data?.videos || [];
