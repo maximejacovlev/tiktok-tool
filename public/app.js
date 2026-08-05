@@ -100,7 +100,35 @@ async function refreshProjects() {
   renderProjectsList(data.projects || []);
 }
 
+const STATUS_ORDER = ['to_edit', 'wip', 'ready_to_post', 'posted'];
+
+function renderProjectsStats(projects) {
+  const el = $('#projects-stats');
+  if (!el) return;
+
+  if (!projects.length) {
+    el.classList.add('hidden');
+    el.innerHTML = '';
+    return;
+  }
+
+  const counts = Object.fromEntries(STATUS_ORDER.map((s) => [s, 0]));
+  projects.forEach((p) => {
+    if (counts[p.status] !== undefined) counts[p.status]++;
+  });
+
+  el.innerHTML = '';
+  STATUS_ORDER.forEach((status) => {
+    const line = document.createElement('div');
+    line.className = `projects-stat status-${status}`;
+    line.textContent = `${STATUS_LABELS[status]} — ${counts[status]}`;
+    el.appendChild(line);
+  });
+  el.classList.remove('hidden');
+}
+
 function renderProjectsList(projects) {
+  renderProjectsStats(projects);
   const list = $('#projects-list');
   const empty = $('#projects-empty');
   list.innerHTML = '';

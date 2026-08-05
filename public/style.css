@@ -179,6 +179,21 @@ button.icon-btn {
 #bank-file-input { margin-top: 8px; color: var(--muted); width: 100%; }
 
 .projects-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.projects-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.projects-stat { font-size: 13px; color: var(--muted); }
+.projects-stat.status-to_edit { color: var(--status-to-edit); }
+.projects-stat.status-wip { color: var(--status-wip); }
+.projects-stat.status-ready_to_post { color: var(--status-ready); }
+.projects-stat.status-posted { color: var(--status-posted); }
 .project-row {
   display: flex;
   flex-direction: column;
