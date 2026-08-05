@@ -9,6 +9,7 @@ let currentProject = {
   status: 'to_edit',
   caption: '',
   sourceUrl: '',
+  postedUrl: '',
 };
 
 let editorState = null;
@@ -127,6 +128,18 @@ function renderProjectsStats(projects) {
   el.classList.remove('hidden');
 }
 
+function syncPostedUrlRow() {
+  const row = $('#posted-url-row');
+  const status = $('#project-status')?.value || currentProject.status;
+  if (!row) return;
+  row.classList.toggle('hidden', status !== 'posted');
+}
+
+function getPostedUrlFromForm() {
+  if ($('#project-status')?.value !== 'posted') return '';
+  return ($('#project-posted-url')?.value || '').trim();
+}
+
 function renderProjectsList(projects) {
   renderProjectsStats(projects);
   const list = $('#projects-list');
@@ -190,6 +203,7 @@ async function loadProject(id) {
     status: data.status,
     caption: data.caption || '',
     sourceUrl: data.sourceUrl || '',
+    postedUrl: data.postedUrl || '',
   };
 
   slides = data.slides.map((s) => ({
@@ -204,6 +218,8 @@ async function loadProject(id) {
 
   $('#project-name').value = currentProject.name;
   $('#project-status').value = currentProject.status;
+  $('#project-posted-url').value = currentProject.postedUrl || '';
+  syncPostedUrlRow();
   $('#step-slides').classList.remove('hidden');
   renderSlides();
   $('#save-status').textContent = `Carrousel « ${data.name} » chargé (${slides.length} slides).`;
@@ -212,9 +228,11 @@ async function loadProject(id) {
 
 function resetWorkSession() {
   slides = [];
-  currentProject = { id: null, name: '', status: 'to_edit', caption: '', sourceUrl: '' };
+  currentProject = { id: null, name: '', status: 'to_edit', caption: '', sourceUrl: '', postedUrl: '' };
   $('#project-name').value = '';
   $('#project-status').value = 'to_edit';
+  $('#project-posted-url').value = '';
+  syncPostedUrlRow();
   $('#step-slides').classList.add('hidden');
   $('#save-status').textContent = '';
 }
@@ -284,11 +302,19 @@ $('#btn-save-project').addEventListener('click', async () => {
 
   try {
     const slideDataUrls = await collectSlideDataUrls();
+    const postedUrl = getPostedUrlFromForm();
+    const status = $('#project-status').value;
+    if (status === 'posted' && postedUrl && !/\/(video|photo)\/\d+/.test(postedUrl)) {
+      statusEl.textContent = 'Lien TikTok invalide (attendu: …/video/… ou …/photo/…).';
+      $('#btn-save-project').disabled = false;
+      return;
+    }
     const meta = {
       name: $('#project-name').value.trim() || `carrousel-${Date.now()}`,
-      status: $('#project-status').value,
+      status,
       caption: currentProject.caption,
       sourceUrl: currentProject.sourceUrl,
+      postedUrl,
       slideCount: slides.length,
     };
 
@@ -329,6 +355,7 @@ $('#btn-save-project').addEventListener('click', async () => {
 
     currentProject.name = meta.name;
     currentProject.status = meta.status;
+    currentProject.postedUrl = postedUrl;
 
     statusEl.textContent = `Carrousel enregistré (${slides.length} slides) — statut : ${STATUS_LABELS[meta.status]}.`;
     refreshProjects();
@@ -341,6 +368,11 @@ $('#btn-save-project').addEventListener('click', async () => {
 
 $('#project-status').addEventListener('change', () => {
   currentProject.status = $('#project-status').value;
+  syncPostedUrlRow();
+});
+
+$('#project-posted-url').addEventListener('input', () => {
+  currentProject.postedUrl = $('#project-posted-url').value.trim();
 });
 
 // ---------------- Scrape ----------------
@@ -876,6 +908,218 @@ $('#title-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') $('#btn-add-title').click();
 });
 
+// ---------------- Navigation ----------------
+function showView(view) {
+  const workspace = $('#view-workspace');
+  const analytics = $('#view-analytics');
+  const navWorkspace = $('#nav-workspace');
+  const navAnalytics = $('#nav-analytics');
+  if (view === 'analytics') {
+    workspace?.classList.add('hidden');
+    analytics?.classList.remove('hidden');
+    navWorkspace?.classList.remove('active');
+    navAnalytics?.classList.add('active');
+    refreshAnalytics();
+  } else {
+    workspace?.classList.remove('hidden');
+    analytics?.classList.add('hidden');
+    navWorkspace?.classList.add('active');
+    navAnalytics?.classList.remove('active');
+  }
+}
+
+$('#nav-workspace')?.addEventListener('click', () => showView('workspace'));
+$('#nav-analytics')?.addEventListener('click', () => showView('analytics'));
+
+// ---------------- Analytics ----------------
+let analyticsChart = null;
+let analyticsProjects = [];
+const analyticsSelected = new Set();
+
+function formatCount(n) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+function renderAnalyticsList() {
+  const list = $('#analytics-list');
+  const empty = $('#analytics-empty');
+  if (!list) return;
+
+  list.innerHTML = '';
+  if (!analyticsProjects.length) {
+    empty?.classList.remove('hidden');
+    return;
+  }
+  empty?.classList.add('hidden');
+
+  analyticsProjects.forEach((p) => {
+    const row = document.createElement('label');
+    row.className = 'analytics-row';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = analyticsSelected.has(p.id);
+    cb.addEventListener('change', () => {
+      if (cb.checked) analyticsSelected.add(p.id);
+      else analyticsSelected.delete(p.id);
+      renderAnalyticsChart();
+    });
+
+    const info = document.createElement('div');
+    info.className = 'analytics-row-info';
+
+    const title = document.createElement('strong');
+    title.textContent = p.name;
+
+    const stats = document.createElement('span');
+    stats.className = 'meta';
+    const updated = p.analyticsUpdatedAt
+      ? ` · MAJ ${new Date(p.analyticsUpdatedAt).toLocaleString('fr-FR')}`
+      : '';
+    stats.textContent = `${formatCount(p.viewCount)} vues · ${formatCount(p.likeCount)} likes · ${formatCount(p.commentCount)} com. · ${formatCount(p.shareCount)} partages${updated}`;
+
+    info.append(title, stats);
+
+    if (p.postedUrl) {
+      const link = document.createElement('a');
+      link.href = p.postedUrl;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.className = 'analytics-link';
+      link.textContent = 'Voir sur TikTok';
+      info.appendChild(link);
+    } else {
+      const warn = document.createElement('span');
+      warn.className = 'meta warn';
+      warn.textContent = 'Lien TikTok manquant';
+      info.appendChild(warn);
+    }
+
+    row.append(cb, info);
+    list.appendChild(row);
+  });
+}
+
+function renderAnalyticsChart() {
+  const canvas = $('#analytics-chart');
+  if (!canvas || typeof Chart === 'undefined') return;
+
+  const selected = analyticsProjects.filter((p) => analyticsSelected.has(p.id));
+  const labels = selected.map((p) => p.name);
+  const views = selected.map((p) => p.viewCount || 0);
+  const likes = selected.map((p) => p.likeCount || 0);
+  const comments = selected.map((p) => p.commentCount || 0);
+
+  if (analyticsChart) analyticsChart.destroy();
+
+  if (!selected.length) {
+    analyticsChart = null;
+    return;
+  }
+
+  analyticsChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Vues', data: views, backgroundColor: 'rgba(91, 140, 255, 0.7)' },
+        { label: 'Likes', data: likes, backgroundColor: 'rgba(51, 196, 129, 0.7)' },
+        { label: 'Commentaires', data: comments, backgroundColor: 'rgba(240, 173, 78, 0.7)' },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#c8cdd8' } } },
+      scales: {
+        x: { ticks: { color: '#9aa2b1' }, grid: { color: 'rgba(255,255,255,0.06)' } },
+        y: { ticks: { color: '#9aa2b1' }, grid: { color: 'rgba(255,255,255,0.06)' }, beginAtZero: true },
+      },
+    },
+  });
+}
+
+async function refreshAnalytics() {
+  const statusEl = $('#analytics-status');
+  try {
+    const res = await fetch('/api/analytics');
+    const data = await res.json();
+    analyticsProjects = data.projects || [];
+
+    const ids = new Set(analyticsProjects.map((p) => p.id));
+    [...analyticsSelected].forEach((id) => {
+      if (!ids.has(id)) analyticsSelected.delete(id);
+    });
+    if (!analyticsSelected.size) {
+      analyticsProjects.forEach((p) => analyticsSelected.add(p.id));
+    }
+
+    const btnConnect = $('#btn-tiktok-connect');
+    if (btnConnect) {
+      if (!data.tiktok?.configured) {
+        btnConnect.textContent = 'API TikTok non configurée';
+        btnConnect.disabled = true;
+      } else if (data.tiktok?.connected) {
+        btnConnect.textContent = 'TikTok connecté ✓';
+        btnConnect.disabled = false;
+      } else {
+        btnConnect.textContent = 'Connecter TikTok';
+        btnConnect.disabled = false;
+      }
+    }
+
+    if (statusEl) {
+      statusEl.textContent = data.tiktok?.connected
+        ? `${analyticsProjects.length} carrousel(s) publié(s).`
+        : `${analyticsProjects.length} carrousel(s) publié(s). Connecte TikTok pour récupérer les stats automatiquement.`;
+    }
+
+    renderAnalyticsList();
+    renderAnalyticsChart();
+  } catch (err) {
+    if (statusEl) statusEl.textContent = 'Erreur: ' + err.message;
+  }
+}
+
+$('#btn-tiktok-connect')?.addEventListener('click', () => {
+  window.location.href = '/api/tiktok/auth';
+});
+
+$('#btn-analytics-refresh')?.addEventListener('click', async () => {
+  const statusEl = $('#analytics-status');
+  statusEl.textContent = 'Actualisation des stats TikTok...';
+  $('#btn-analytics-refresh').disabled = true;
+  try {
+    const res = await fetch('/api/analytics/refresh', { method: 'POST' });
+    const data = await parseJsonResponse(res);
+    if (!res.ok) throw new Error(data.error || 'Échec refresh');
+    analyticsProjects = data.projects || [];
+    if (data.message) statusEl.textContent = data.message;
+    else statusEl.textContent = `${data.updated || 0} carrousel(s) mis à jour.`;
+    renderAnalyticsList();
+    renderAnalyticsChart();
+  } catch (err) {
+    statusEl.textContent = 'Erreur: ' + err.message;
+  } finally {
+    $('#btn-analytics-refresh').disabled = false;
+  }
+});
+
+function handleTikTokOAuthReturn() {
+  const params = new URLSearchParams(window.location.search);
+  const tiktok = params.get('tiktok');
+  if (!tiktok) return;
+  if (tiktok === 'connected') showView('analytics');
+  if (tiktok === 'error') {
+    const el = $('#analytics-status');
+    if (el) el.textContent = 'Connexion TikTok échouée. Vérifie la config OAuth.';
+    showView('analytics');
+  }
+  window.history.replaceState({}, '', window.location.pathname);
+}
+
 // ---------------- Storage status ----------------
 async function refreshStorageStatus() {
   const el = $('#storage-status');
@@ -892,6 +1136,8 @@ async function refreshStorageStatus() {
 }
 
 // ---------------- Init ----------------
+handleTikTokOAuthReturn();
+syncPostedUrlRow();
 refreshStorageStatus();
 refreshBank();
 refreshProjects();

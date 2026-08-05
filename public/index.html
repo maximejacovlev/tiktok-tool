@@ -11,9 +11,13 @@
     <h1>TikTok Carousel Tool</h1>
     <p class="subtitle">Extrais un carrousel TikTok, ajoute tes slides depuis la banque, enregistre ton travail et exporte quand tu es prêt.</p>
     <p id="storage-status" class="storage-status" aria-live="polite"></p>
+    <nav class="main-nav">
+      <button type="button" id="nav-workspace" class="nav-btn active">Atelier</button>
+      <button type="button" id="nav-analytics" class="nav-btn">Analytics</button>
+    </nav>
   </header>
 
-  <div class="app-layout">
+  <div id="view-workspace" class="app-layout">
     <aside class="sidebar sidebar-left card">
       <h2>Mes carrousels</h2>
       <div id="projects-stats" class="projects-stats hidden"></div>
@@ -45,6 +49,9 @@
           <button id="btn-save-project" class="primary">Enregistrer</button>
           <button id="btn-export-zip" class="secondary">Télécharger ZIP</button>
         </div>
+        <div id="posted-url-row" class="row posted-url-row hidden">
+          <input id="project-posted-url" type="url" placeholder="Lien de ton post TikTok (ex: https://www.tiktok.com/@toi/video/123…)" />
+        </div>
         <p id="save-status" class="status"></p>
         <p class="hint">Glisse une image depuis la banque pour l'ajouter. Utilise ← → pour réordonner les slides.</p>
         <div id="slides-grid" class="grid drop-zone"></div>
@@ -68,6 +75,25 @@
       <div id="titles-list" class="titles-list"></div>
       <p id="titles-empty" class="status">Aucun titre enregistré.</p>
     </aside>
+  </div>
+
+  <div id="view-analytics" class="analytics-view hidden">
+    <section class="card">
+      <div class="analytics-header">
+        <h2>Analytics — TikToks publiés</h2>
+        <div class="row analytics-actions">
+          <button type="button" id="btn-tiktok-connect" class="secondary">Connecter TikTok</button>
+          <button type="button" id="btn-analytics-refresh" class="primary">Actualiser les stats</button>
+        </div>
+      </div>
+      <p id="analytics-status" class="status"></p>
+      <p class="hint">Colle le lien de ton post quand tu passes un carrousel en « Publié », puis actualise ici. Nécessite une app TikTok for Developers (Display API).</p>
+      <div class="analytics-chart-wrap">
+        <canvas id="analytics-chart"></canvas>
+      </div>
+      <div id="analytics-list" class="analytics-list"></div>
+      <p id="analytics-empty" class="status">Aucun carrousel publié pour l'instant.</p>
+    </section>
   </div>
 
   <!-- Editor modal -->
@@ -94,6 +120,7 @@
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

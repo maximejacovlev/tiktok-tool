@@ -1,6 +1,7 @@
 const { sql } = require('@vercel/postgres');
 const { PROJECT_STATUSES } = require('./constants');
 const blobStore = require('./blob');
+const { parseTikTokVideoId } = require('../tiktok');
 
 let ready = false;
 
@@ -61,7 +62,28 @@ async function init() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
+  await migrateSchema();
   ready = true;
+}
+
+async function migrateSchema() {
+  await sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS posted_url TEXT DEFAULT ''`;
+  await sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS tiktok_video_id TEXT DEFAULT ''`;
+  await sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS view_count BIGINT DEFAULT 0`;
+  await sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS like_count BIGINT DEFAULT 0`;
+  await sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS comment_count BIGINT DEFAULT 0`;
+  await sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS share_count BIGINT DEFAULT 0`;
+  await sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS analytics_updated_at TIMESTAMPTZ`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS tiktok_auth (
+      id TEXT PRIMARY KEY DEFAULT 'default',
+      access_token TEXT,
+      refresh_token TEXT,
+      open_id TEXT,
+      expires_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
 }
 
 function rowToProject(row, slideCount) {
@@ -71,6 +93,13 @@ function rowToProject(row, slideCount) {
     status: row.status,
     caption: row.caption || '',
     sourceUrl: row.source_url || '',
+    postedUrl: row.posted_url || '',
+    tiktokVideoId: row.tiktok_video_id || '',
+    viewCount: Number(row.view_count) || 0,
+    likeCount: Number(row.like_count) || 0,
+    commentCount: Number(row.comment_count) || 0,
+    shareCount: Number(row.share_count) || 0,
+    analyticsUpdatedAt: row.analytics_updated_at || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     slideCount,
@@ -108,30 +137,90 @@ async function getProject(id) {
   return project;
 }
 
-async function createProject({ name, status, caption, sourceUrl, slideCount }) {
+async function createProject({ name, status, caption, sourceUrl, postedUrl, slideCount }) {
   const id = `project-${Date.now()}`;
   const safeName = (name || `carrousel-${Date.now()}`).replace(/[^a-zA-Z0-9\-_\s]/g, '_').trim();
+  const videoId = parseTikTokVideoId(postedUrl || '') || '';
   await sql`
-    INSERT INTO projects (id, name, status, caption, source_url)
-    VALUES (${id}, ${safeName}, ${status || 'to_edit'}, ${caption || ''}, ${sourceUrl || ''})
+    INSERT INTO projects (id, name, status, caption, source_url, posted_url, tiktok_video_id)
+    VALUES (${id}, ${safeName}, ${status || 'to_edit'}, ${caption || ''}, ${sourceUrl || ''}, ${postedUrl || ''}, ${videoId})
   `;
   return { ...(await getProject(id)), slideCount: slideCount || 0 };
 }
 
-async function updateProject(id, { name, status, caption, sourceUrl }) {
+async function updateProject(id, { name, status, caption, sourceUrl, postedUrl }) {
   const existing = await getProject(id);
   if (!existing) return null;
   const safeName = name ? name.replace(/[^a-zA-Z0-9\-_\s]/g, '_').trim() : existing.name;
+  const nextPostedUrl = postedUrl !== undefined ? postedUrl : existing.postedUrl;
+  const videoId = parseTikTokVideoId(nextPostedUrl || '') || '';
   await sql`
     UPDATE projects SET
       name = ${safeName},
       status = ${status || existing.status},
       caption = ${caption !== undefined ? caption : existing.caption},
       source_url = ${sourceUrl !== undefined ? sourceUrl : existing.sourceUrl},
+      posted_url = ${nextPostedUrl || ''},
+      tiktok_video_id = ${videoId},
       updated_at = NOW()
     WHERE id = ${id}
   `;
   return getProject(id);
+}
+
+async function listPostedProjects() {
+  const { rows } = await sql`
+    SELECT * FROM projects WHERE status = 'posted' ORDER BY updated_at DESC
+  `;
+  const projects = [];
+  for (const row of rows) {
+    projects.push(rowToProject(row, await countSlides(row.id)));
+  }
+  return projects;
+}
+
+async function updateProjectAnalytics(projectId, metrics) {
+  await sql`
+    UPDATE projects SET
+      view_count = ${metrics.viewCount || 0},
+      like_count = ${metrics.likeCount || 0},
+      comment_count = ${metrics.commentCount || 0},
+      share_count = ${metrics.shareCount || 0},
+      analytics_updated_at = NOW(),
+      updated_at = NOW()
+    WHERE id = ${projectId}
+  `;
+}
+
+async function getTikTokAuth() {
+  const { rows } = await sql`SELECT * FROM tiktok_auth WHERE id = 'default'`;
+  if (!rows.length) return null;
+  const row = rows[0];
+  return {
+    accessToken: row.access_token,
+    refreshToken: row.refresh_token,
+    openId: row.open_id,
+    expiresAt: row.expires_at,
+  };
+}
+
+async function saveTikTokAuth({ accessToken, refreshToken, openId, expiresIn }) {
+  const expiresAt = new Date(Date.now() + (expiresIn || 86400) * 1000).toISOString();
+  await sql`
+    INSERT INTO tiktok_auth (id, access_token, refresh_token, open_id, expires_at, updated_at)
+    VALUES ('default', ${accessToken}, ${refreshToken}, ${openId || ''}, ${expiresAt}, NOW())
+    ON CONFLICT (id) DO UPDATE SET
+      access_token = EXCLUDED.access_token,
+      refresh_token = EXCLUDED.refresh_token,
+      open_id = EXCLUDED.open_id,
+      expires_at = EXCLUDED.expires_at,
+      updated_at = NOW()
+  `;
+  return getTikTokAuth();
+}
+
+async function clearTikTokAuth() {
+  await sql`DELETE FROM tiktok_auth WHERE id = 'default'`;
 }
 
 async function deleteProject(id) {
@@ -267,8 +356,13 @@ module.exports = {
   init,
   listProjects,
   getProject,
+  listPostedProjects,
   createProject,
   updateProject,
+  updateProjectAnalytics,
+  getTikTokAuth,
+  saveTikTokAuth,
+  clearTikTokAuth,
   deleteProject,
   saveSlide,
   listBank,

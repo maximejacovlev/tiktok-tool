@@ -9,6 +9,8 @@ const { scrapeCarousel } = require('./scraper');
 const { getStore } = require('./store');
 const blobStore = require('./store/blob');
 const { parseMultipartFiles } = require('./multipart');
+const tiktok = require('./tiktok');
+const { refreshPostedAnalytics } = require('./analytics');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -228,7 +230,7 @@ app.get('/api/projects/:id', async (req, res) => {
 });
 
 app.post('/api/projects', async (req, res) => {
-  const { name, status, caption, sourceUrl, slideCount } = req.body || {};
+  const { name, status, caption, sourceUrl, postedUrl, slideCount } = req.body || {};
   if (!slideCount) {
     return res.status(400).json({ error: 'Aucune slide à enregistrer.' });
   }
@@ -236,7 +238,7 @@ app.post('/api/projects', async (req, res) => {
     if (status && !store.PROJECT_STATUSES.includes(status)) {
       return res.status(400).json({ error: 'Statut invalide.' });
     }
-    const project = await store.createProject({ name, status, caption, sourceUrl, slideCount });
+    const project = await store.createProject({ name, status, caption, sourceUrl, postedUrl, slideCount });
     res.json({ ok: true, project });
   });
 });
@@ -257,12 +259,15 @@ app.put('/api/projects/:id/slides/:index', slideUpload.single('slide'), async (r
 
 app.put('/api/projects/:id', async (req, res) => {
   const id = path.basename(req.params.id);
-  const { name, status, caption, sourceUrl } = req.body || {};
+  const { name, status, caption, sourceUrl, postedUrl } = req.body || {};
   await withStore(res, async (store) => {
     if (status && !store.PROJECT_STATUSES.includes(status)) {
       return res.status(400).json({ error: 'Statut invalide.' });
     }
-    const project = await store.updateProject(id, { name, status, caption, sourceUrl });
+    if (postedUrl && String(postedUrl).trim() && !tiktok.isTikTokPostUrl(postedUrl)) {
+      return res.status(400).json({ error: 'Lien TikTok invalide (attendu: …/video/… ou …/photo/…).' });
+    }
+    const project = await store.updateProject(id, { name, status, caption, sourceUrl, postedUrl });
     if (!project) return res.status(404).json({ error: 'Carrousel introuvable.' });
     res.json({ ok: true, project });
   });
@@ -302,7 +307,74 @@ app.delete('/api/titles/:id', async (req, res) => {
   });
 });
 
-// SPA fallback
+// ---------- 7. Analytics & TikTok OAuth ----------
+app.get('/api/analytics', async (req, res) => {
+  await withStore(res, async (store) => {
+    const projects = await store.listPostedProjects();
+    const auth = await store.getTikTokAuth?.();
+    res.json({
+      projects,
+      tiktok: {
+        configured: tiktok.isConfigured(),
+        connected: !!(auth && auth.accessToken),
+      },
+    });
+  });
+});
+
+app.post('/api/analytics/refresh', async (req, res) => {
+  await withStore(res, async (store) => {
+    try {
+      const result = await refreshPostedAnalytics(store);
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      res.status(400).json({ error: err.message || 'Refresh analytics échoué.' });
+    }
+  });
+});
+
+app.get('/api/tiktok/status', async (req, res) => {
+  await withStore(res, async (store) => {
+    const auth = await store.getTikTokAuth?.();
+    res.json({
+      configured: tiktok.isConfigured(),
+      connected: !!(auth && auth.accessToken),
+    });
+  });
+});
+
+app.get('/api/tiktok/auth', (req, res) => {
+  if (!tiktok.isConfigured()) {
+    return res.status(400).json({
+      error: 'TikTok API non configurée. Ajoute TIKTOK_CLIENT_KEY et TIKTOK_CLIENT_SECRET sur Vercel.',
+    });
+  }
+  res.redirect(tiktok.getAuthUrl(req));
+});
+
+app.get('/api/tiktok/callback', async (req, res) => {
+  const { code, error } = req.query;
+  if (error || !code) {
+    return res.redirect('/?tiktok=error');
+  }
+  try {
+    const redirectUri = tiktok.getRedirectUri(req);
+    const tokenData = await tiktok.exchangeCodeForToken(String(code), redirectUri);
+    const store = await getStore();
+    await store.saveTikTokAuth({
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token,
+      openId: tokenData.open_id,
+      expiresIn: tokenData.expires_in,
+    });
+    res.redirect('/?tiktok=connected');
+  } catch (err) {
+    console.error('TikTok OAuth error:', err);
+    res.redirect('/?tiktok=error');
+  }
+});
+
+// ---------- SPA fallback ----------
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api')) return next();
   res.sendFile(path.join(APP_ROOT, 'public', 'index.html'), (err) => {
